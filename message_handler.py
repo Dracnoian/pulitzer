@@ -141,6 +141,19 @@ class MessageHandler:
             else:
                 full_content = footer
         
+        # ADD ATTACHMENTS BELOW FOOTER as single-line compact list
+        attachments = message_data.get('attachments', [])
+        if attachments:
+            attachment_links = []
+            for att in attachments[:10]:
+                url = att.get('url') or att.get('proxy_url')
+                filename = att.get('filename', 'file')
+                if url:
+                    attachment_links.append(f"[{filename}]({url})")
+            
+            if attachment_links:
+                full_content += f"\n-# {', '.join(attachment_links)}"
+        
         # Limit content length (Discord limit is 2000 characters)
         if len(full_content) > 2000:
             full_content = full_content[:1997] + "..."

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 Discord Message Relay Bot
-Receives messages from BetterDiscord plugin via Flask relay and forwards to Discord channels
+Receives messages from BetterDiscord plugin and forwards to Discord channels
 """
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import discord
 import logging
 import sys
@@ -114,9 +115,66 @@ def health():
             'error': str(e)
         }), 500
 
+@app.route('/relay', methods=['POST'])
+def relay():
+    """
+    Direct relay endpoint for BetterDiscord plugin
+    Receives messages directly from the plugin without intermediate relay server
+    """
+    try:
+        # Check if bot is ready
+        if not bot_client or not bot_client.ready:
+            return jsonify({
+                'error': 'Bot not ready',
+                'status': 'starting'
+            }), 503
+        
+        # Validate authorization
+        auth_header = request.headers.get('Authorization', '')
+        if config.auth_token and auth_header != config.auth_token:
+            logger.warning(f"Unauthorized relay request from {request.remote_addr}")
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        # Get message data
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        logger.info(f"Received relay message from channel {data.get('channel_id')}")
+        
+        # Process the message asynchronously
+        future = asyncio.run_coroutine_threadsafe(
+            message_handler.process_message(data),
+            bot_client.loop
+        )
+        
+        # Wait for result with timeout
+        try:
+            success, error_msg = future.result(timeout=30)
+            
+            if success:
+                return jsonify({'status': 'success'}), 200
+            else:
+                return jsonify({
+                    'status': 'partial_success',
+                    'message': error_msg
+                }), 200
+        except TimeoutError:
+            return jsonify({
+                'error': 'Processing timeout',
+                'status': 'timeout'
+            }), 504
+            
+    except Exception as e:
+        logger.error(f"Error processing relay: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/message', methods=['POST'])
 def receive_message():
-    """Receive and process message from relay server"""
+    """
+    Receive and process message from relay server (legacy endpoint)
+    Kept for backward compatibility if using intermediate relay
+    """
     try:
         # Check if bot is ready
         if not bot_client or not bot_client.ready:
@@ -203,5 +261,6 @@ if __name__ == '__main__':
     # Start Flask server
     port = config.port
     logger.info(f"Starting Flask server on port {port}")
+    logger.info(f"Direct relay endpoint available at: http://0.0.0.0:{port}/relay")
     
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
